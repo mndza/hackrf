@@ -192,7 +192,43 @@ jobs:
         path: ${{github.workspace}}/install/bin
       if: matrix.os == 'windows' && matrix.cmake == 'latest' && matrix.shell == 'pwsh'
 
+  gateware:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Prepare FPGA toolchain
+        uses: YosysHQ/setup-oss-cad-suite@v4
+        with:
+          python-override: true
+      - name: Install dependencies
+        run: |
+          python -m pip install -r firmware/fpga/requirements.txt
+      - name: Build gateware
+        run: |
+          cd firmware/fpga
+          python -m build
+        timeout-minutes: 5
+      - name: Archive build logs
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: praline-gateware-build-log
+          path: |
+            firmware/fpga/build/*
+            !firmware/fpga/build/*.bin
+            !firmware/fpga/build/*.asc
+            !firmware/fpga/build/*.il
+            !firmware/fpga/build/*.json
+          retention-days: 5
+      - name: Archive gateware binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: praline-gateware
+          path: firmware/fpga/build/praline_fpga.bin
+
   firmware:
+    needs: [gateware]
     strategy:
       matrix:
         os: ['macos', 'ubuntu', 'windows']
@@ -219,6 +255,13 @@ jobs:
     - uses: actions/checkout@v6
       with:
         submodules: true
+
+    - name: Download prebuilt FPGA bitstreams
+      uses: actions/download-artifact@v5
+      with:
+        name: praline-gateware
+        path: firmware/fpga/build
+      if: matrix.board == 'PRALINE'
 
     - name: Setup cmake
       uses: lukka/get-cmake@latest
