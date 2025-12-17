@@ -120,7 +120,7 @@ class SGPIOInterface(wiring.Component):
                 with m.Else():
                     with m.If(dac_stream.ready & capture):
                         m.d.comb += tx_clk_en.eq(1)
-                        m.d.sync += tx_write_pipe[0].eq(capture)
+                        m.d.sync += tx_write_pipe[0].eq(1)
                         if tx_cycles > 1:
                             m.next = "TX0"
 

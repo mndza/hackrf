@@ -1,0 +1,43 @@
+name: Gateware
+
+on: [push, pull_request]
+
+jobs:
+  build-gateware:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.13"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Prepare FPGA toolchain
+        uses: YosysHQ/setup-oss-cad-suite@v3
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          python -m pip install -r firmware/fpga/requirements.txt
+      - name: Build gateware
+        run: |
+          cd firmware/fpga
+          python -m build
+      - name: Archive build logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hackrf-pro-gateware-build-log
+          path: |
+            firmware/fpga/build/*
+            !firmware/fpga/build/*.bin
+            !firmware/fpga/build/*.asc
+            !firmware/fpga/build/*.il
+            !firmware/fpga/build/*.json
+          retention-days: 5
+      - name: Archive gateware binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: hackrf-pro-gateware
+          path: firmware/fpga/build/praline_fpga.bin
