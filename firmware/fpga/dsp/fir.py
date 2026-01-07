@@ -132,8 +132,6 @@ class HalfBandDecimator(wiring.Component):
 
                 # Mode switch logic.
                 with m.If(~self.enable):
-                    m.d.sync += input_idx.eq(0)
-                    m.d.sync += output_idx.eq(0)
                     m.d.sync += odd.eq(0)
                     m.d.sync += even_valid.eq(0)
                     m.next = "BYPASS"
