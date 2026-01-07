@@ -39,8 +39,6 @@ class SGPIOInterface(wiring.Component):
 
         direction_i = platform.request("direction").i
         enable_i    = ~platform.request("disable").i
-        capture_en  = platform.request("capture_en").o
-        m.d.comb += capture_en.eq(1)
 
         # Determine data transfer direction.
         direction  = Signal()
@@ -50,16 +48,20 @@ class SGPIOInterface(wiring.Component):
         # SGPIO clock and data lines.
         tx_clk_en      = Signal()
         rx_clk_en      = Signal()
+        capture_en     = Signal()
         data_to_host   = Signal(self.sample_width)
         byte_to_host   = Signal(8)
         data_from_host = Signal(self.sample_width)
         byte_from_host = Signal(8)
 
         m.submodules.clk_out = clk_out = io.DDRBuffer("o", platform.request("host_clk", dir="-"), o_domain=self._domain)
+        m.submodules.cap_out = cap_out = io.DDRBuffer("o", platform.request("capture_en", dir="-"), o_domain=self._domain)
         m.submodules.host_io = host_io = io.DDRBuffer('io', platform.request("host_data", dir="-"), i_domain=self._domain, o_domain=self._domain)
 
         m.d.sync += clk_out.o[0].eq(tx_clk_en)
         m.d.sync += clk_out.o[1].eq(rx_clk_en)
+        m.d.comb += cap_out.o[0].eq(capture_en)
+        m.d.comb += cap_out.o[1].eq(capture_en)
         m.d.sync += host_io.oe.eq(transfer_from_adc)
         m.d.comb += host_io.o[0].eq(byte_to_host)
         m.d.comb += host_io.o[1].eq(byte_to_host)
@@ -106,10 +108,12 @@ class SGPIOInterface(wiring.Component):
 
         # Main state machine.
         with m.FSM():
-            with m.State("IDLE"): 
+            with m.State("IDLE"):
+                m.d.sync += capture_en.eq(capture)
 
                 with m.If(transfer_from_adc):
                     with m.If(self.prbs):
+                        m.d.sync += capture_en.eq(1)
                         m.next = "PRBS"
                     with m.Elif(adc_stream.valid & capture):
                         m.d.comb += rx_clk_en.eq(1)
@@ -135,7 +139,7 @@ class SGPIOInterface(wiring.Component):
                     m.d.comb += tx_clk_en.eq(1)
                     m.next = "IDLE" if i == tx_cycles-2 else f"TX{i+1}"
 
-            with m.State("PRBS"): 
+            with m.State("PRBS"):
                 m.d.comb += rx_clk_en.eq(prbs_count == 0)
                 m.d.comb += prbs_advance.eq(prbs_count == 0)
                 m.d.sync += byte_to_host.eq(prbs.value)
