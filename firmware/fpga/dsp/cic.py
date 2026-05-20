@@ -60,11 +60,13 @@ class CICInterpolator(wiring.Component):
         stages = []
 
         # When M=1, we can replace the inner CIC stage with an equivalent zero-order hold integrator.
+        # When M=2, we can replace the inner CIC stage with a special upsampler that adds the last 2 samples.
         inner_zoh = self.M == 1
+        m2_upsampler = self.M == 2
 
         # Comb stages.
         width = self.width_in
-        for i in range(self.stages - int(inner_zoh)):
+        for i in range(self.stages - int(inner_zoh+m2_upsampler)):
             next_width = self.width_in + next(bit_growths)
             stage = factor_reset(CombStage(self.M, width, width_out=next_width, num_channels=self.num_channels, always_ready=always_ready))
             m.submodules[f"comb{i}"] = stage
@@ -73,15 +75,21 @@ class CICInterpolator(wiring.Component):
         
         # Upsampling.
         if list(self.rates) != [1]:
-            if inner_zoh:
-                _ = next(bit_growths), next(bit_growths)  # drop comb and integrator growths
-            stage = factor_reset(Upsampler(self.num_channels * width, max(self.rates), zero_order_hold=inner_zoh, variable=True, always_ready=always_ready))
+            if not m2_upsampler:
+                if inner_zoh:
+                    _ = next(bit_growths), next(bit_growths)  # drop comb and integrator growths
+                stage = factor_reset(Upsampler(self.num_channels * width, max(self.rates), zero_order_hold=inner_zoh, variable=True, always_ready=always_ready))
+            else:
+                next_width = self.width_in + next(bit_growths)
+                stage = factor_reset(UpsamplerM2(width, next_width, max(self.rates), variable=True, num_channels=self.num_channels, always_ready=always_ready))
+                width = next_width
+                _ = next(bit_growths)
             m.submodules["upsampler"] = stage
             m.d.sync += stage.factor.eq(1 << self.factor)
             stages += [ stage ]
 
         # Integrator stages.
-        for i in range(self.stages - int(inner_zoh)):
+        for i in range(self.stages - int(inner_zoh+m2_upsampler)):
             width_out = self.width_in + next(bit_growths)
             stage = SignExtend(width, width_out, num_channels=self.num_channels, always_ready=always_ready)
             m.submodules[f"signextend{i}"] = stage
@@ -433,6 +441,49 @@ class Upsampler(wiring.Component):
             with m.Else():
                 if not self.zoh:
                     m.d.sync += self.output.payload.eq(0)
+                m.d.sync += self.output.valid.eq(1)
+                m.d.sync += counter.eq(counter - 1)
+                with m.If(counter == 1):
+                    m.d.sync += ready_stb.eq(1)
+
+        return m
+
+
+class UpsamplerM2(wiring.Component):
+    def __init__(self, width_in, width_out, factor, variable=False, num_channels=1, always_ready=False):
+        self.width_in = width_in
+        self.width_out = width_out
+        self.num_channels = num_channels
+        signature = {
+            "input":  In(stream.Signature(data.ArrayLayout(signed(width_in), num_channels), always_ready=always_ready)),
+            "output": Out(stream.Signature(data.ArrayLayout(signed(width_out), num_channels), always_ready=always_ready)),
+        }
+        if variable:
+            signature.update({"factor": In(range(factor + 1))})
+        else:
+            self.factor = Const(factor)
+        super().__init__(signature)
+
+    def elaborate(self, platform):
+        m = Module()
+
+        counter = Signal.like(self.factor)
+        ready_stb = Signal(init=1)
+        if not self.input.signature.always_ready:
+            m.d.comb += self.input.ready.eq(ready_stb)
+        
+        last_payload = Signal.like(self.input.p)
+
+        with m.If(~self.output.valid | self.output.ready):
+            with m.If(counter == 0):
+                for c in range(self.num_channels):
+                    m.d.sync += self.output.p[c].eq(self.input.p[c] + last_payload[c])
+                m.d.sync += last_payload.eq(self.input.payload)
+                m.d.sync += self.output.valid.eq(self.input.valid)
+                with m.If(self.input.valid):
+                    m.d.sync += counter.eq(self.factor - 1)
+                    m.d.sync += ready_stb.eq(self.factor < 2)
+            with m.Else():
                 m.d.sync += self.output.valid.eq(1)
                 m.d.sync += counter.eq(counter - 1)
                 with m.If(counter == 1):
